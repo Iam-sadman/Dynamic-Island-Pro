@@ -2,7 +2,7 @@
 // @id              dynamic-island-pro
 // @name            Dynamic Island Pro
 // @description     A living, breathing pill overlay inspired by iPhone's Dynamic Island with interactive App-Filtered Notifications, Antigravity IDE Live Activity, and Agent Prompts.
-// @version         2.0.2
+// @version         2.0.3
 // @author          Sadman Sakib Fahim (Iam-sadman)
 // @github          https://github.com/Iam-sadman/Dynamic-Island-Pro
 // @include         windhawk.exe
@@ -8933,7 +8933,7 @@ void UnbindVolumeEndpoint() {
     g_volumeEndpointStale = true;
 }
 
-void UpdateSystemSnapshot(bool includeGpuStats, bool includeNetStats) {
+void UpdateSystemSnapshot(bool includeGpuStats, bool includeNetStats, bool metricsVisible = true) {
     SystemSnapshot next;
     {
         std::lock_guard lock(g_stateMutex);
@@ -8941,66 +8941,54 @@ void UpdateSystemSnapshot(bool includeGpuStats, bool includeNetStats) {
         next.charging = g_state.system.charging;
     }
 
-    if (includeGpuStats) {
-        next.gpuPercent = GetGpuUsage();
-    }
-    if (includeNetStats) {
-        GetNetworkUsage(next.netUpMbps, next.netDownMbps);
-    }
+    if (metricsVisible) {
+        if (includeGpuStats) {
+            next.gpuPercent = GetGpuUsage();
+        }
+        if (includeNetStats) {
+            GetNetworkUsage(next.netUpMbps, next.netDownMbps);
+        }
 
-    MEMORYSTATUSEX memory = {};
-    memory.dwLength = sizeof(memory);
-    if (GlobalMemoryStatusEx(&memory)) {
-        next.memoryPercent = static_cast<int>(memory.dwMemoryLoad);
-        next.memoryTotalGB = static_cast<float>(memory.ullTotalPhys) / (1024.0f * 1024.0f * 1024.0f);
-        next.memoryUsedGB = next.memoryTotalGB - static_cast<float>(memory.ullAvailPhys) / (1024.0f * 1024.0f * 1024.0f);
-    }
+        MEMORYSTATUSEX memory = {};
+        memory.dwLength = sizeof(memory);
+        if (GlobalMemoryStatusEx(&memory)) {
+            next.memoryPercent = static_cast<int>(memory.dwMemoryLoad);
+            next.memoryTotalGB = static_cast<float>(memory.ullTotalPhys) / (1024.0f * 1024.0f * 1024.0f);
+            next.memoryUsedGB = next.memoryTotalGB - static_cast<float>(memory.ullAvailPhys) / (1024.0f * 1024.0f * 1024.0f);
+        }
 
-    ULARGE_INTEGER freeBytesAvailable = {};
-    ULARGE_INTEGER totalBytes = {};
-    ULARGE_INTEGER totalFreeBytes = {};
-    if (GetDiskFreeSpaceExW(L"C:\\", &freeBytesAvailable, &totalBytes, &totalFreeBytes) &&
-        totalBytes.QuadPart > 0) {
-        next.diskFreePercent = ClampInt(
-            static_cast<int>(totalFreeBytes.QuadPart * 100 / totalBytes.QuadPart), 0, 100);
-    }
+        ULARGE_INTEGER freeBytesAvailable = {};
+        ULARGE_INTEGER totalBytes = {};
+        ULARGE_INTEGER totalFreeBytes = {};
+        if (GetDiskFreeSpaceExW(L"C:\\", &freeBytesAvailable, &totalBytes, &totalFreeBytes) &&
+            totalBytes.QuadPart > 0) {
+            next.diskFreePercent = ClampInt(
+                static_cast<int>(totalFreeBytes.QuadPart * 100 / totalBytes.QuadPart), 0, 100);
+        }
 
-    HWND foreground = GetForegroundWindow();
-    if (foreground && foreground != g_hwnd) {
-        wchar_t title[96] = {};
-        GetWindowTextW(foreground, title, ARRAYSIZE(title));
-        if (!IsIgnorableForegroundWindow(foreground, title)) {
-            next.foregroundTitle = title;
-            if (next.foregroundTitle.size() > 42) {
-                next.foregroundTitle.resize(42);
-                next.foregroundTitle += L"...";
+        FILETIME idle = {};
+        FILETIME kernel = {};
+        FILETIME user = {};
+        if (GetSystemTimes(&idle, &kernel, &user)) {
+            const ULONGLONG idleNow = FileTimeToUInt64(idle);
+            const ULONGLONG kernelNow = FileTimeToUInt64(kernel);
+            const ULONGLONG userNow = FileTimeToUInt64(user);
+            const ULONGLONG idlePrev = FileTimeToUInt64(g_prevIdleTime);
+            const ULONGLONG kernelPrev = FileTimeToUInt64(g_prevKernelTime);
+            const ULONGLONG userPrev = FileTimeToUInt64(g_prevUserTime);
+
+            const ULONGLONG total = (kernelNow - kernelPrev) + (userNow - userPrev);
+            const ULONGLONG idleDelta = idleNow - idlePrev;
+            if (total > 0 && kernelPrev != 0) {
+                next.cpuPercent = ClampInt(static_cast<int>((total - idleDelta) * 100 / total), 0, 100);
             }
 
-        } else {
-            next.foregroundTitle.clear();
+            g_prevIdleTime = idle;
+            g_prevKernelTime = kernel;
+            g_prevUserTime = user;
         }
-    }
-
-    FILETIME idle = {};
-    FILETIME kernel = {};
-    FILETIME user = {};
-    if (GetSystemTimes(&idle, &kernel, &user)) {
-        const ULONGLONG idleNow = FileTimeToUInt64(idle);
-        const ULONGLONG kernelNow = FileTimeToUInt64(kernel);
-        const ULONGLONG userNow = FileTimeToUInt64(user);
-        const ULONGLONG idlePrev = FileTimeToUInt64(g_prevIdleTime);
-        const ULONGLONG kernelPrev = FileTimeToUInt64(g_prevKernelTime);
-        const ULONGLONG userPrev = FileTimeToUInt64(g_prevUserTime);
-
-        const ULONGLONG total = (kernelNow - kernelPrev) + (userNow - userPrev);
-        const ULONGLONG idleDelta = idleNow - idlePrev;
-        if (total > 0 && kernelPrev != 0) {
-            next.cpuPercent = ClampInt(static_cast<int>((total - idleDelta) * 100 / total), 0, 100);
-        }
-
-        g_prevIdleTime = idle;
-        g_prevKernelTime = kernel;
-        g_prevUserTime = user;
+    } else {
+        CloseHardwareQueries();
     }
 
     std::lock_guard lock(g_stateMutex);
@@ -9237,16 +9225,19 @@ bool IsDeviceActiveViaRegistry(const wchar_t* capability, std::wstring* outAppNa
 }
 
 bool IsMicrophoneActiveViaCoreAudio(std::wstring* outAppName = nullptr) {
-    Microsoft::WRL::ComPtr<IMMDeviceEnumerator> enumerator;
-    HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
-                                  __uuidof(IMMDeviceEnumerator), (void**)&enumerator);
-    if (FAILED(hr) || !enumerator) {
-        return false;
+    static Microsoft::WRL::ComPtr<IMMDeviceEnumerator> s_enumerator;
+    if (!s_enumerator) {
+        HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
+                                      __uuidof(IMMDeviceEnumerator), (void**)&s_enumerator);
+        if (FAILED(hr) || !s_enumerator) {
+            return false;
+        }
     }
 
     Microsoft::WRL::ComPtr<IMMDeviceCollection> collection;
-    hr = enumerator->EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE, &collection);
+    HRESULT hr = s_enumerator->EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE, &collection);
     if (FAILED(hr) || !collection) {
+        s_enumerator.Reset();
         return false;
     }
 
@@ -23967,7 +23958,12 @@ DWORD WINAPI RenderThreadProc(void*) {
         }
         if (now >= nextProgressPoll) {
             UpdateProgressSnapshot();
-            nextProgressPoll = now + 0.25;
+            bool progressActive = false;
+            {
+                std::lock_guard lock(g_stateMutex);
+                progressActive = g_state.progress.active;
+            }
+            nextProgressPoll = now + (progressActive ? 0.25 : 1.5);
         }
         if (!pollBusy && now >= nextPrivacyPoll) {
             UpdatePrivacyIndicators();
@@ -24205,12 +24201,13 @@ DWORD WINAPI RenderThreadProc(void*) {
         if (!pollBusy && !stripActive && now >= nextSystemPoll) {
             const bool needGpuStats = gameOverlayVisible || hwMonitorVisible;
             const bool needNetStats = hwMonitorVisible;
+            const bool metricsVisible = hwMonitorVisible || gameOverlayVisible;
 
-            UpdateSystemSnapshot(needGpuStats, needNetStats);
+            UpdateSystemSnapshot(needGpuStats, needNetStats, metricsVisible);
             if (!g_endpointVolume) {
                 g_volumeEndpointStale = true;
             }
-            nextSystemPoll = now + 1.0;
+            nextSystemPoll = now + (metricsVisible ? 1.0 : 3.5);
         }
 
         if (primary.kind == IslandKind::Idle) {
@@ -24599,6 +24596,9 @@ DWORD WINAPI RenderThreadProc(void*) {
             targetFps = s_cachedRate;
         }
         targetFps = ClampInt(targetFps, 30, 1000);
+        if (!snapshot.battery.charging && snapshot.battery.percent > 0 && snapshot.battery.percent <= 100) {
+            targetFps = std::min(targetFps, 60);
+        }
         double targetFrameMs = 1000.0 / static_cast<double>(targetFps);
 
         const bool springsAnimating =
@@ -24623,8 +24623,9 @@ DWORD WINAPI RenderThreadProc(void*) {
         setHighResTimer(lastAnimatingAt >= 0.0 && now - lastAnimatingAt < kHighResTimerHoldSec);
 
         if (!needsRender) {
-
-            WaitForSingleObject(g_stopEvent, (stripActive && !springsAnimating) ? 50 : 16);
+            const int idleWaitMs = (stripActive && !springsAnimating) ? 50 :
+                                   (!snapshot.battery.charging && snapshot.battery.percent > 0) ? 33 : 16;
+            WaitForSingleObject(g_stopEvent, idleWaitMs);
             nextFrameTarget = std::chrono::steady_clock::now();
         } else if (springsAnimating && currentSettings.targetFps <= 0 && SUCCEEDED(DwmFlush())) {
 

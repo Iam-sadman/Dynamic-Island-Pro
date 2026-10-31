@@ -4,6 +4,16 @@ All notable changes, enhancements, and bug fixes for **Dynamic Island Pro** are 
 
 ---
 
+## [2.0.3] — 2026-11-01
+
+### ⚡ Comprehensive Performance & Power Optimizations
+- **Lazy Hardware & PDH Sampling**: Refactored `UpdateSystemSnapshot` with lazy metric evaluation. When neither the Hardware Monitor nor Game Overlay tabs are visible, expensive PDH counters (`\GPU Engine(*)\...`, `\Network Interface(*)\...`), `GlobalMemoryStatusEx`, `GetDiskFreeSpaceExW`, and foreground window queries are completely bypassed. When metrics close, PDH query handles are cleanly closed via `CloseHardwareQueries()` to consume 0% background sampler CPU.
+- **Adaptive Battery Saver Mode**: Dynamically inspects power status (`ACLineStatus == 0`). On battery power, animation frame rate is automatically capped to 60 FPS (down from 144Hz/240Hz), and idle thread sleep is relaxed to 33ms, saving significant laptop battery life while preserving silky smooth responsiveness.
+- **Core Audio COM Enumerator Caching**: In `IsMicrophoneActiveViaCoreAudio`, cached `IMMDeviceEnumerator` across 2-second polling cycles to eliminate repeated COM factory creation and teardown overhead.
+- **Dynamically Throttled Task Progress Polling**: Relaxed `UpdateProgressSnapshot` polling from 0.25s down to 1.5s when no external tasks or progress rings are actively running.
+
+---
+
 ## [2.0.2] — 2026-11-01
 
 ### 🎙️ Real-Time Core Audio (WASAPI) Active Microphone Detection
