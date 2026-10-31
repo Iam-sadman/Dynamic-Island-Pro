@@ -9157,8 +9157,10 @@ bool ConsentStoreEntryInUse(HKEY key, const wchar_t* subKeyName = nullptr) {
             for (auto& ch : exePath) {
                 if (ch == L'#') ch = L'\\';
             }
-            if (GetFileAttributesW(exePath.c_str()) == INVALID_FILE_ATTRIBUTES) {
-                return false;
+            if (exePath.find(L'\\') != std::wstring::npos) {
+                if (GetFileAttributesW(exePath.c_str()) == INVALID_FILE_ATTRIBUTES) {
+                    return false;
+                }
             }
         }
         return true;
