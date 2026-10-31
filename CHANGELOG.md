@@ -4,6 +4,16 @@ All notable changes, enhancements, and bug fixes for **Dynamic Island Pro** are 
 
 ---
 
+## [2.0.2] — 2026-11-01
+
+### 🎙️ Real-Time Core Audio (WASAPI) Active Microphone Detection
+- **Real-Time WASAPI Capture Session Enumeration**: Implemented `IsMicrophoneActiveViaCoreAudio` using Windows Core Audio API (`IMMDeviceEnumerator` -> `eCapture` -> `IAudioSessionEnumerator` -> `IAudioSessionControl2`).
+- **Resolved Discord & Electron Voice Detection**: Electron-based applications like Discord stream audio through Chromium's internal WASAPI audio pipeline without immediately committing registry keys to Windows CapabilityAccessManager. By auditing live `AudioSessionStateActive` capture endpoints directly from the Windows Audio Engine, active voice channels and calls in Discord (and all other apps) are now detected instantly in real time (0 ms latency).
+- **Process Path Normalization in `CleanActiveAppName`**: Added support for standard backslash (`\`) path separators so full process executable paths (e.g. `C:\Users\...\Discord.exe`) resolve cleanly to friendly app titles like `"Discord"` across all privacy tooltips.
+- **Packaged UWP App Compatibility**: Ensured Package Family Names (such as WhatsApp Desktop and Windows Camera) bypass file-path existence validations so UWP apps trigger camera and microphone indicators without hindrance.
+
+---
+
 ## [2.0.1] — 2026-11-01
 
 ### 🚀 Dynamic Island Pro Major Release & Fixes

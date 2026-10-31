@@ -2,7 +2,7 @@
 // @id              dynamic-island-pro
 // @name            Dynamic Island Pro
 // @description     A living, breathing pill overlay inspired by iPhone's Dynamic Island with interactive App-Filtered Notifications, Antigravity IDE Live Activity, and Agent Prompts.
-// @version         2.0.1
+// @version         2.0.2
 // @author          Sadman Sakib Fahim (Iam-sadman)
 // @github          https://github.com/Iam-sadman/Dynamic-Island-Pro
 // @include         windhawk.exe
@@ -9091,9 +9091,11 @@ void UpdateBrightnessSnapshot() {
 
 std::wstring CleanActiveAppName(const std::wstring& raw) {
     std::wstring name;
+    size_t slashPos = raw.rfind(L'\\');
     size_t hashPos = raw.rfind(L'#');
-    if (hashPos != std::wstring::npos) {
-        name = raw.substr(hashPos + 1);
+    size_t sepPos = (slashPos != std::wstring::npos) ? slashPos : hashPos;
+    if (sepPos != std::wstring::npos) {
+        name = raw.substr(sepPos + 1);
         if (name.size() > 4 && _wcsicmp(name.c_str() + name.size() - 4, L".exe") == 0) {
             name.resize(name.size() - 4);
         }
@@ -9234,7 +9236,75 @@ bool IsDeviceActiveViaRegistry(const wchar_t* capability, std::wstring* outAppNa
     return isActive;
 }
 
+bool IsMicrophoneActiveViaCoreAudio(std::wstring* outAppName = nullptr) {
+    Microsoft::WRL::ComPtr<IMMDeviceEnumerator> enumerator;
+    HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
+                                  __uuidof(IMMDeviceEnumerator), (void**)&enumerator);
+    if (FAILED(hr) || !enumerator) {
+        return false;
+    }
+
+    Microsoft::WRL::ComPtr<IMMDeviceCollection> collection;
+    hr = enumerator->EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE, &collection);
+    if (FAILED(hr) || !collection) {
+        return false;
+    }
+
+    UINT count = 0;
+    if (FAILED(collection->GetCount(&count)) || count == 0) {
+        return false;
+    }
+
+    bool foundActive = false;
+    for (UINT i = 0; i < count; ++i) {
+        Microsoft::WRL::ComPtr<IMMDevice> device;
+        if (FAILED(collection->Item(i, &device)) || !device) continue;
+
+        Microsoft::WRL::ComPtr<IAudioSessionManager2> mgr;
+        if (FAILED(device->Activate(__uuidof(IAudioSessionManager2), CLSCTX_ALL, nullptr, (void**)&mgr)) || !mgr) continue;
+
+        Microsoft::WRL::ComPtr<IAudioSessionEnumerator> sessionEnum;
+        if (FAILED(mgr->GetSessionEnumerator(&sessionEnum)) || !sessionEnum) continue;
+
+        int sessCount = 0;
+        if (FAILED(sessionEnum->GetCount(&sessCount))) continue;
+
+        for (int s = 0; s < sessCount; ++s) {
+            Microsoft::WRL::ComPtr<IAudioSessionControl> control;
+            if (FAILED(sessionEnum->GetSession(s, &control)) || !control) continue;
+
+            AudioSessionState state = AudioSessionStateInactive;
+            control->GetState(&state);
+            if (state == AudioSessionStateActive) {
+                DWORD pid = 0;
+                Microsoft::WRL::ComPtr<IAudioSessionControl2> control2;
+                if (SUCCEEDED(control.As(&control2)) && control2) {
+                    control2->GetProcessId(&pid);
+                }
+                if (pid > 0 && outAppName && outAppName->empty()) {
+                    HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+                    if (hProc) {
+                        wchar_t path[MAX_PATH] = {0};
+                        DWORD pathLen = MAX_PATH;
+                        if (QueryFullProcessImageNameW(hProc, 0, path, &pathLen)) {
+                            *outAppName = CleanActiveAppName(path);
+                        }
+                        CloseHandle(hProc);
+                    }
+                }
+                foundActive = true;
+                break;
+            }
+        }
+        if (foundActive) break;
+    }
+    return foundActive;
+}
+
 bool IsMicrophoneActive(std::wstring* outAppName = nullptr) {
+    if (IsMicrophoneActiveViaCoreAudio(outAppName)) {
+        return true;
+    }
     return IsDeviceActiveViaRegistry(L"microphone", outAppName);
 }
 
