@@ -23990,7 +23990,12 @@ DWORD WINAPI RenderThreadProc(void*) {
 
         if (g_autoHiddenParked.load()) {
             const Settings parkSettings = GetSettingsCopy();
-            const bool audioPlayingNow = parkSettings.popUpOnAudio && snapshot.media.playing;
+            bool mediaPlayingNow = false;
+            {
+                std::lock_guard lock(g_stateMutex);
+                mediaPlayingNow = g_state.media.playing;
+            }
+            const bool audioPlayingNow = parkSettings.popUpOnAudio && mediaPlayingNow;
             if (audioPlayingNow) {
                 g_autoHiddenParked = false;
             } else if (parkSettings.islandVisibilityMode == IslandVisibilityMode::AlwaysShown) {
