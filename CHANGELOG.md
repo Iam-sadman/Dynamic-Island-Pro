@@ -4,6 +4,21 @@ All notable changes, enhancements, and bug fixes for **Dynamic Island Pro** are 
 
 ---
 
+## [2.0.4] — 2026-11-01
+
+### 🖥️ Display & Visibility Modes (Smart Maximized, Always Hidden, Always Visible)
+- **Tri-State Island Display Mode**: Added first-class `IslandVisibilityMode` setting in the `Behavior & Visibility` configuration:
+  - **`smart_maximized` (Hide on Fullscreen & Maximized)**: Automatically hides the island whenever an application or game is maximized (`WS_MAXIMIZE`, `IsZoomed`, or window covering `rcWork`) or running in exclusive/borderless fullscreen. Moving the mouse cursor into the top dock zone smoothly reveals the island; moving away collapses and hides it again.
+  - **`always_hidden` (Always Hidden / iPhone Dynamic Island Style)**: Keeps the island completely hidden by default during idle desktop work. Hovering near the top dock zone, receiving a notification/alert, or playing desktop audio automatically pops down the island.
+  - **`always_shown` (Always Visible)**: Keeps the island continuously displayed on the desktop at all times.
+- **Maximized & Borderless Window Detection**: Added `IsForegroundMaximized(HWND)` combining `IsZoomed`, `WS_MAXIMIZE` style flags, `WINDOWPLACEMENT.showCmd == SW_SHOWMAXIMIZED`, and monitor working area (`rcWork`) bounds validation to accurately detect both standard Win32 windows and modern borderless applications (e.g. Chrome, Discord, VS Code, Spotify).
+
+### 🎵 Desktop Audio Playback Pop-Up
+- **Automatic Pop-Up on Audio Playback**: Added `PopUpOnAudio` setting (`Behavior.PopUpOnAudio: true`). When any music, video, or media playback is detected on your PC (Spotify, YouTube, browser video, media player), the island automatically wakes up, pops down, and displays the living media player pill with album art, track title, scrubber, and waveform.
+- **Zero-Latency Playback Wake**: Integrated `TriggerNudge()` into GSMTC playback change listener (`!prevPlaying && next.playing`), ensuring the island immediately unparks and transitions to active without polling delay the moment audio starts.
+
+---
+
 ## [2.0.3] — 2026-11-01
 
 ### ⚡ Comprehensive Performance & Power Optimizations

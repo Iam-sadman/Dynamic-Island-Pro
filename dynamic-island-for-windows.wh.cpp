@@ -2,7 +2,7 @@
 // @id              dynamic-island-pro
 // @name            Dynamic Island Pro
 // @description     A living, breathing pill overlay inspired by iPhone's Dynamic Island with interactive App-Filtered Notifications, Antigravity IDE Live Activity, and Agent Prompts.
-// @version         2.0.3
+// @version         2.0.4
 // @author          Sadman Sakib Fahim (Iam-sadman)
 // @github          https://github.com/Iam-sadman/Dynamic-Island-Pro
 // @include         windhawk.exe
@@ -206,6 +206,19 @@ We love community contributions! To ensure high-quality updates, please follow t
     $description: Automatically scales the island to match your monitor's DPI. Recommended for 4K screens.
   $name: Appearance & Position
 - Behavior:
+  - IslandVisibilityMode: smart_maximized
+    $name: Island display mode
+    $description: "Choose when the island stays on screen:
+      - smart_maximized: Hide when an app is Fullscreen or Maximized (hover top zone to reveal)
+      - always_hidden: Always Hidden by default (hover top zone to reveal, iPhone Dynamic Island style)
+      - always_shown: Always Visible on desktop"
+    $options:
+      - smart_maximized: Hide on Fullscreen & Maximized (hover to reveal)
+      - always_hidden: Always Hidden (hover to reveal)
+      - always_shown: Always Visible
+  - PopUpOnAudio: true
+    $name: Pop up on desktop audio playback
+    $description: Automatically pop up and reveal the island when music, video, or audio is actively playing on your PC.
   - AlwaysOnTop: true
     $name: Always on top
     $description: Keeps the island above all other windows. Turn this off if it blocks other apps.
@@ -993,6 +1006,12 @@ constexpr bool IsBottomPosition(Position position) {
            position == Position::BottomRight;
 }
 
+enum class IslandVisibilityMode {
+    SmartMaximized,
+    AlwaysHidden,
+    AlwaysShown,
+};
+
 enum class AccentMode {
     Auto,
     System,
@@ -1175,6 +1194,8 @@ struct Settings {
     bool mediaTabLyrics = false;
     int autoHideIdleSeconds = 0;
     bool autoHideFullscreen = true;
+    IslandVisibilityMode islandVisibilityMode = IslandVisibilityMode::SmartMaximized;
+    bool popUpOnAudio = true;
     bool borderMergedMode = false;
     bool unhideOnHover = true;
     bool alwaysOnTop = true;
@@ -2708,6 +2729,64 @@ bool IsForegroundFullscreen(HWND targetHwnd) {
     return false;
 }
 
+bool IsForegroundMaximized(HWND targetHwnd) {
+    HWND fg = GetForegroundWindow();
+    if (!fg || fg == targetHwnd || fg == GetDesktopWindow() || fg == GetShellWindow()) {
+        return false;
+    }
+
+    if (!IsWindowVisible(fg) || IsIconic(fg)) return false;
+
+    wchar_t className[256] = {};
+    GetClassNameW(fg, className, 256);
+    if (wcscmp(className, L"WorkerW") == 0 || wcscmp(className, L"Progman") == 0 ||
+        wcscmp(className, L"Shell_TrayWnd") == 0) {
+        return false;
+    }
+
+    if (IsZoomed(fg) || (GetWindowLongPtrW(fg, GWL_STYLE) & WS_MAXIMIZE)) {
+        return true;
+    }
+
+    WINDOWPLACEMENT wp = { sizeof(WINDOWPLACEMENT) };
+    if (GetWindowPlacement(fg, &wp) && wp.showCmd == SW_SHOWMAXIMIZED) {
+        return true;
+    }
+
+    RECT clientRect = {};
+    if (GetClientRect(fg, &clientRect)) {
+        POINT pt = {0, 0};
+        ClientToScreen(fg, &pt);
+        clientRect.left += pt.x;
+        clientRect.right += pt.x;
+        clientRect.top += pt.y;
+        clientRect.bottom += pt.y;
+
+        HMONITOR hMon = MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi = { sizeof(MONITORINFO) };
+        if (GetMonitorInfoW(hMon, &mi)) {
+            if (clientRect.left <= mi.rcWork.left &&
+                clientRect.top <= mi.rcWork.top &&
+                clientRect.right >= mi.rcWork.right &&
+                clientRect.bottom >= mi.rcWork.bottom) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+bool IsForegroundAppObscuring(HWND targetHwnd, IslandVisibilityMode mode, bool fallbackAutoHideFullscreen) {
+    if (mode == IslandVisibilityMode::SmartMaximized) {
+        return IsForegroundFullscreen(targetHwnd) || IsForegroundMaximized(targetHwnd);
+    }
+    if (mode == IslandVisibilityMode::AlwaysShown || mode == IslandVisibilityMode::AlwaysHidden) {
+        return false;
+    }
+    return fallbackAutoHideFullscreen && IsForegroundFullscreen(targetHwnd);
+}
+
 struct MonitorEnumData {
     std::vector<HMONITOR> monitors;
 };
@@ -3215,6 +3294,21 @@ void LoadSettings() {
     }
     const std::wstring hideSec = GetStringSettingWithFallback(L"Behavior.AutoHideIdleSeconds", L"Appearance.AutoHideIdleSeconds");
     next.autoHideIdleSeconds = hideSec.empty() ? 0 : _wtoi(hideSec.c_str());
+    const std::wstring visModeStr = GetStringSettingCopy(L"Behavior.IslandVisibilityMode");
+    if (EqualsNoCase(visModeStr, L"always_hidden")) {
+        next.islandVisibilityMode = IslandVisibilityMode::AlwaysHidden;
+    } else if (EqualsNoCase(visModeStr, L"always_shown")) {
+        next.islandVisibilityMode = IslandVisibilityMode::AlwaysShown;
+    } else {
+        next.islandVisibilityMode = IslandVisibilityMode::SmartMaximized;
+    }
+    const wchar_t* popUpAudioSetting = Wh_GetStringSetting(L"Behavior.PopUpOnAudio");
+    if (popUpAudioSetting) {
+        next.popUpOnAudio = Wh_GetIntSetting(L"Behavior.PopUpOnAudio") != 0;
+        Wh_FreeStringSetting(popUpAudioSetting);
+    } else {
+        next.popUpOnAudio = true;
+    }
     next.unhideOnHover = Wh_GetIntSetting(L"Behavior.UnhideOnHover") != 0;
     next.alwaysOnTop = Wh_GetIntSetting(L"Behavior.AlwaysOnTop") != 0;
     const int localExpandOnHover = Wh_GetIntValue(L"ExpandOnHoverOverride", -1);
@@ -3397,9 +3491,10 @@ void LoadSettings() {
     }
     next.clockAccentGlow = Wh_GetIntSetting(L"Themes.ClockAccentGlow") != 0;
     bool settingsChangedWhileHidden = (g_autoHiddenParked.load() || g_manuallyHidden.load());
-    bool unhideRequested = (next.autoHideIdleSeconds == 0) ||
+    bool unhideRequested = (next.islandVisibilityMode == IslandVisibilityMode::AlwaysShown) ||
+                           (next.autoHideIdleSeconds == 0 && next.islandVisibilityMode != IslandVisibilityMode::AlwaysHidden) ||
                            (next.unhideOnHover && !g_settings.unhideOnHover);
-    if (unhideRequested || (settingsChangedWhileHidden && next.autoHideIdleSeconds == 0)) {
+    if (unhideRequested || (settingsChangedWhileHidden && (next.islandVisibilityMode == IslandVisibilityMode::AlwaysShown || (next.autoHideIdleSeconds == 0 && next.islandVisibilityMode != IslandVisibilityMode::AlwaysHidden)))) {
         g_autoHiddenParked = false;
         g_manuallyHidden = false;
         Wh_SetIntValue(L"ManuallyHidden", 0);
@@ -5473,7 +5568,7 @@ DWORD WINAPI MediaThreadProc(void*) {
 
         if (trackJustChanged) {
             g_layoutDirty = true;
-            if (g_settings.mediaAutoExpand) {
+            if (g_settings.mediaAutoExpand || g_settings.popUpOnAudio) {
                 TriggerNudge();
             }
         }
@@ -21798,6 +21893,7 @@ LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
                 HWND hwnd = g_hwnd;
                 RECT dockRect = GetIslandDockRect();
                 if (hwnd && PtInRect(&dockRect, info->pt)) {
+                    g_fullscreenOverrideVisible = true;
                     g_autoHiddenParked = false;
                     PostMessageW(hwnd, WM_APP_MOUSE_WAKE, 0, 0);
                 }
@@ -23894,16 +23990,22 @@ DWORD WINAPI RenderThreadProc(void*) {
 
         if (g_autoHiddenParked.load()) {
             const Settings parkSettings = GetSettingsCopy();
-            if (parkSettings.autoHideIdleSeconds == 0 && !parkedForFullscreen) {
+            const bool audioPlayingNow = parkSettings.popUpOnAudio && snapshot.media.playing;
+            if (audioPlayingNow) {
+                g_autoHiddenParked = false;
+            } else if (parkSettings.islandVisibilityMode == IslandVisibilityMode::AlwaysShown) {
+                g_autoHiddenParked = false;
+            } else if (parkSettings.autoHideIdleSeconds == 0 && !parkedForFullscreen &&
+                       parkSettings.islandVisibilityMode != IslandVisibilityMode::AlwaysHidden) {
                 g_autoHiddenParked = false;
             } else {
                 previousFrame = std::chrono::steady_clock::now();
 
                 setHighResTimer(false);
                 if (parkedForFullscreen) {
-                    MsgWaitForMultipleObjects(1, &g_stopEvent, FALSE, 1500, QS_ALLINPUT);
+                    MsgWaitForMultipleObjects(1, &g_stopEvent, FALSE, 1200, QS_ALLINPUT);
                     const bool stillFullscreen =
-                        parkSettings.autoHideFullscreen && IsForegroundFullscreen(hwnd);
+                        IsForegroundAppObscuring(hwnd, parkSettings.islandVisibilityMode, parkSettings.autoHideFullscreen);
                     g_isFullscreen.store(stillFullscreen, std::memory_order_relaxed);
                     if (!stillFullscreen) {
                         g_fullscreenOverrideVisible = false;
@@ -24108,6 +24210,8 @@ DWORD WINAPI RenderThreadProc(void*) {
                                        !snapshot.media.title.empty() &&
                                        (now - snapshot.media.titleChangedAt < 5.0);
 
+        const bool audioPlayingActive = currentSettings.popUpOnAudio && snapshot.media.playing;
+
         bool isTransientAlert = (primary.kind == IslandKind::Clipboard ||
                                  primary.kind == IslandKind::Notification ||
                                  primary.kind == IslandKind::Volume ||
@@ -24119,17 +24223,24 @@ DWORD WINAPI RenderThreadProc(void*) {
                                  primary.kind == IslandKind::DoNotDisturb ||
                                  primary.kind == IslandKind::Lookup ||
                                  primary.kind == IslandKind::SongId ||
-                                 recentTrackChange);
+                                 recentTrackChange ||
+                                 audioPlayingActive);
 
         const bool unhideGraceActive = (now < g_hotkeyUnhideUntil.load());
         const bool hoverUnhides = currentSettings.unhideOnHover && hover;
 
         bool currentlyHidden = false;
         if (!unhideGraceActive) {
-            if (currentSettings.autoHideIdleSeconds == -1 && !isTransientAlert && !pinned) {
-                currentlyHidden = true;
-            } else if (currentSettings.autoHideIdleSeconds > 0) {
-                currentlyHidden = (now - lastInteractionTime > currentSettings.autoHideIdleSeconds);
+            if (currentSettings.islandVisibilityMode == IslandVisibilityMode::AlwaysHidden) {
+                currentlyHidden = !isTransientAlert && !pinned;
+            } else if (currentSettings.islandVisibilityMode == IslandVisibilityMode::AlwaysShown) {
+                currentlyHidden = false;
+            } else {
+                if (currentSettings.autoHideIdleSeconds == -1 && !isTransientAlert && !pinned) {
+                    currentlyHidden = true;
+                } else if (currentSettings.autoHideIdleSeconds > 0) {
+                    currentlyHidden = (now - lastInteractionTime > currentSettings.autoHideIdleSeconds);
+                }
             }
         }
 
@@ -24142,34 +24253,43 @@ DWORD WINAPI RenderThreadProc(void*) {
 
         if (currentlyHidden && !currentSettings.unhideOnHover) {
             isHoverExpanded = false;
-        } else if (isHoverExpanded || hoverUnhides || pinned || isTransientAlert || unhideGraceActive) {
+        } else if (isHoverExpanded || hoverUnhides || pinned || isTransientAlert || unhideGraceActive || audioPlayingActive) {
             lastInteractionTime = now;
         }
 
         bool isHidden = false;
         if (!unhideGraceActive) {
-            if (currentSettings.autoHideIdleSeconds == -1 && !isTransientAlert && !isHoverExpanded && !hoverUnhides && !pinned) {
-                isHidden = true;
-            } else if (currentSettings.autoHideIdleSeconds > 0) {
-                if (hoverUnhides) {
-                    isHidden = false;
-                } else {
-                    isHidden = (now - lastInteractionTime > currentSettings.autoHideIdleSeconds);
+            if (currentSettings.islandVisibilityMode == IslandVisibilityMode::AlwaysHidden) {
+                isHidden = !isTransientAlert && !isHoverExpanded && !hoverUnhides && !pinned;
+            } else if (currentSettings.islandVisibilityMode == IslandVisibilityMode::AlwaysShown) {
+                isHidden = false;
+            } else {
+                if (currentSettings.autoHideIdleSeconds == -1 && !isTransientAlert && !isHoverExpanded && !hoverUnhides && !pinned) {
+                    isHidden = true;
+                } else if (currentSettings.autoHideIdleSeconds > 0) {
+                    if (hoverUnhides) {
+                        isHidden = false;
+                    } else {
+                        isHidden = (now - lastInteractionTime > currentSettings.autoHideIdleSeconds);
+                    }
                 }
             }
         }
 
         static bool isFullscreen = false;
         static double lastFullscreenCheck = -1.0;
-        if (now - lastFullscreenCheck > 0.5) {
-            const bool newFullscreen = currentSettings.autoHideFullscreen && IsForegroundFullscreen(hwnd);
+        if (now - lastFullscreenCheck > 0.4) {
+            const bool newFullscreen = IsForegroundAppObscuring(hwnd, currentSettings.islandVisibilityMode, currentSettings.autoHideFullscreen);
             if (isFullscreen && !newFullscreen) {
-
                 g_fullscreenOverrideVisible = false;
             }
             isFullscreen = newFullscreen;
             g_isFullscreen.store(isFullscreen, std::memory_order_relaxed);
             lastFullscreenCheck = now;
+        }
+
+        if (!hover && !pinned && !isTransientAlert && !audioPlayingActive) {
+            g_fullscreenOverrideVisible = false;
         }
 
         static double lastTopmostCheck = 0.0;
@@ -24273,8 +24393,8 @@ DWORD WINAPI RenderThreadProc(void*) {
         }
 
         const bool fullscreenSuppressed =
-            isFullscreen && !g_fullscreenOverrideVisible.load(std::memory_order_relaxed);
-        if ((isHidden || fullscreenSuppressed) && !privacyActive && !pinned && !isHoverExpanded && !isTransientAlert) {
+            isFullscreen && !g_fullscreenOverrideVisible.load(std::memory_order_relaxed) && !audioPlayingActive;
+        if ((isHidden || fullscreenSuppressed) && !privacyActive && !pinned && !isHoverExpanded && !hover && !isTransientAlert) {
             primary.width = 0.0f;
             primary.height = 0.0f;
             secondary.reset();
